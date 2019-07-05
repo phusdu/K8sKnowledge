@@ -1,0 +1,325 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "numberOfInstances": {
+      "type": "int",
+      "defaultValue": 2,
+      "metadata": {
+        "description": "Number of VM instances to create, default is 2"
+      }
+    },
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "Admin username>",
+      "metadata": {
+        "description": "Admin username for the Virtual Machines"
+      }
+    },
+    "sshKeyData": {
+      "type": "string",
+      "defaultValue": "SSH public key>",
+      "metadata": {
+        "description": "SSH public key for the Virtual Machines"
+      }
+    },
+    "imagePublisher": {
+      "type": "string",
+      "defaultValue": "Canonical",
+      "metadata": {
+        "description": " Publisher for the OS image, the default is Canonical"
+      }
+    },
+    "imageOffer": {
+      "type": "string",
+      "defaultValue": "UbuntuServer",
+      "metadata": {
+        "description": "The name of the image offer. The default is Ubuntu"
+      }
+    },
+    "imageSKU": {
+      "type": "string",
+      "defaultValue": "16.04-LTS",
+      "metadata": {
+        "description": "Version of the image. The default is 16.04-LTS"
+      }
+    },
+    "vmSize": {
+      "type": "string",
+      "defaultValue": "Standard_F2s",
+      "metadata": {
+        "description": "VM size"
+      }
+    },
+    "aadClientId": {
+      "type": "string",
+      "metadata": {
+        "description": "AAD client Id"
+      }
+    },
+    "aadClientSecret": {
+      "type": "string",
+      "metadata": {
+        "description": "AAD client secret"
+      }
+    }
+  },
+  "variables": {
+    "apiVersionCompute": "2016-03-30",
+    "apiVersionStorage": "2017-10-01",
+    "apiVersionNetwork": "2018-02-01",
+    "apiVersionAvailabilitySet": "2017-12-01",
+    "vmName": "[concat('k8snode-', uniqueString(resourceGroup().id))]",
+    "storageAccountName": "[concat('k8sstorage', uniqueString(resourceGroup().id))]",
+    "vnetName": "[concat('k8svnet-', uniqueString(resourceGroup().id))]",
+    "vnetID": "[resourceId('Microsoft.Network/virtualNetworks',variables('vnetName'))]",
+    "subnetName": "k8ssubnet",
+    "subnetRef": "[concat(variables('vnetID'),'/subnets/',variables('subnetName'))]",
+    "availabilitySetName": "[concat('k8savset-', uniqueString(resourceGroup().id))]",
+    "publicIPAddressName": "[concat('k8spublicip-', uniqueString(resourceGroup().id))]",
+    "publicIPAddressType": "Static",
+    "networkSecurityGroupName": "[concat('k8snsg-', uniqueString(resourceGroup().id))]",
+    "routeTableName": "[concat('k8sroutetable-', uniqueString(resourceGroup().id))]",
+    "routeTableID": "[resourceId('Microsoft.Network/routeTables', variables('routeTableName'))]",
+    "sshKeyPath": "[concat('/home/',parameters('adminUsername'),'/.ssh/authorized_keys')]",
+    "addressPrefix": "172.16.0.0/16",
+    "subnetPrefix": "172.16.0.0/24",
+    "nicName": "[concat('k8snicname-', uniqueString(resourceGroup().id))]",
+    "cseName" : "[concat('k8scse-', uniqueString(resourceGroup().id))]"
+  },
+  "resources": [
+    {
+      "apiVersion": "[variables('apiVersionStorage')]",
+      "type": "Microsoft.Storage/storageAccounts",
+      "name": "[variables('storageAccountName')]",
+      "location": "[resourceGroup().location]",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "kind": "Storage",
+      "properties": {}
+    },
+    {
+      "apiVersion": "[variables('apiVersionNetwork')]",
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "[variables('networkSecurityGroupName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "SSH",
+            "properties": {
+              "description": "Allow inbound SSH port.",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "22",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 200,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "allow_kube_tls",
+            "properties": {
+              "description": "Allow inbound SSH port.",
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "6443",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 300,
+              "direction": "Inbound"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "[variables('apiVersionNetwork')]",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "sku": {
+        "name": "Basic",
+        "tier": "Regional"
+      },
+      "name": "[concat(variables('publicIPAddressName'), '-', copyIndex())]",
+      "location": "[resourceGroup().location]",
+      "copy": {
+        "name": "publicIPLoop",
+        "count": "[parameters('numberOfInstances')]"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "[variables('publicIPAddressType')]",
+        "dnsSettings": {
+          "domainNameLabel": "[concat(variables('vmName'), '-', copyIndex())]"
+        }
+      }
+    },
+    {
+      "apiVersion": "[variables('apiVersionNetwork')]",
+      "type": "Microsoft.Network/virtualNetworks",
+      "name": "[variables('vnetName')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[concat('Microsoft.Network/routeTables/', variables('routeTableName'))]",
+        "[concat('Microsoft.Network/networkSecurityGroups/', variables('networkSecurityGroupName'))]"
+      ],
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('addressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('subnetPrefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('networkSecurityGroupName'))]"
+              },
+              "routeTable": {
+                "id": "[variables('routeTableID')]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "[variables('apiVersionNetwork')]",
+      "type": "Microsoft.Network/routeTables",
+      "location": "[resourceGroup().location]",
+      "name": "[variables('routeTableName')]"
+    },
+    {
+      "apiVersion": "[variables('apiVersionNetwork')]",
+      "type": "Microsoft.Network/networkInterfaces",
+      "name": "[concat(variables('nicName'), '-', copyIndex())]",
+      "location": "[resourceGroup().location]",
+      "copy": {
+        "name": "nicLoop",
+        "count": "[parameters('numberOfInstances')]"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Network/publicIPAddresses/', variables('publicIPAddressName'), '-', copyIndex())]",
+        "[concat('Microsoft.Network/virtualNetworks/', variables('vnetName'))]"
+      ],
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', concat(variables('publicIPAddressName'), '-', copyIndex()))]"
+              },
+              "subnet": {
+                "id": "[variables('subnetRef')]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "[variables('apiVersionAvailabilitySet')]",
+      "type": "Microsoft.Compute/availabilitySets",
+      "sku": {
+        "name": "Classic"
+      },
+      "name": "[variables('availabilitySetName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "platformFaultDomainCount": 3,
+        "platformUpdateDomainCount": 5
+      }
+    },
+    {
+      "apiVersion": "[variables('apiVersionCompute')]",
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "name": "[concat(variables('vmName'), '-', copyIndex(), '/', variables('cseName'))]",
+      "location": "[resourceGroup().location]",
+      "copy": {
+        "name": "cseLoop",
+        "count": "[parameters('numberOfInstances')]"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Compute/virtualMachines/', variables('vmName'), '-', copyIndex())]"
+      ],
+      "properties": {
+        "publisher": "Microsoft.Azure.Extensions",
+        "type": "CustomScript",
+        "typeHandlerVersion": "2.0",
+        "autoUpgradeMinorVersion": false,
+        "settings": {
+          "script": "<Replace it with base64 output from step 2>"
+        }
+      }
+    },
+    {
+      "apiVersion": "[variables('apiVersionCompute')]",
+      "type": "Microsoft.Compute/virtualMachines",
+      "name": "[concat(variables('vmName'), '-', copyIndex())]",
+      "location": "[resourceGroup().location]",
+      "copy": {
+        "name": "vmLoop",
+        "count": "[parameters('numberOfInstances')]"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Network/networkInterfaces/', variables('nicName'), '-', copyIndex())]",
+        "[concat('Microsoft.Compute/availabilitySets/', variables('availabilitySetName'))]",
+        "[concat('Microsoft.Storage/storageAccounts/', variables('storageAccountName'))]"
+      ],
+      "properties": {
+        "availabilitySet": {
+          "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('availabilitySetName'))]"
+        },
+        "hardwareProfile": {
+          "vmSize": "[parameters('vmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[concat(variables('vmName'), '-', copyIndex())]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "customData": "[base64(concat('#cloud-config\n\nwrite_files:\n- path: \"/etc/kubernetes/cloud-config\"\n  permissions: 0644\n  content: |\n    {\n    \"cloud\":\"AzurePublicCloud\",\n    \"tenantId\": \"', subscription().tenantId, '\",\n    \"subscriptionId\": \"', subscription().subscriptionId, '\",\n    \"aadClientId\": \"', parameters('aadClientId'), '\",\n    \"aadClientSecret\": \"', parameters('aadClientSecret'), '\",\n    \"resourceGroup\": \"', resourceGroup().name, '\",\n    \"location\": \"', resourceGroup().location, '\",\n    \"subnetName\": \"', variables('subnetName'), '\",\n    \"securityGroupName\": \"', variables('networkSecurityGroupName'), '\",\n    \"vnetName\": \"', variables('vnetName'), '\",\n    \"routeTableName\": \"', variables('routeTableName'), '\",\n    \"vnetResourceGroup\": \"\",\n    \"primaryAvailabilitySetName\": \"', variables('availabilitySetName'), '\",\n    \"cloudProviderBackoff\": false,\n    \"cloudProviderBackoffRetries\": 0,\n    \"cloudProviderBackoffExponent\": 0,\n    \"cloudProviderBackoffDuration\": 0,\n    \"cloudProviderBackoffJitter\": 0,\n    \"cloudProviderRatelimit\": false,\n    \"cloudProviderRateLimitQPS\": 0,\n    \"cloudProviderRateLimitBucket\": 0,\n    \"useManagedIdentityExtension\": false,\n    \"useInstanceMetadata\": true\n    }'))]",
+          "linuxConfiguration": {
+            "disablePasswordAuthentication": true,
+            "ssh": {
+              "publicKeys": [
+                {
+                  "path": "[variables('sshKeyPath')]",
+                  "keyData": "[parameters('sshKeyData')]"
+                }
+              ]
+            }
+          }
+        },
+        "storageProfile": {
+          "osDisk": {
+            "osType": "Linux",
+            "name": "[concat(variables('vmName'), '_', copyIndex(), '_osdisk')]",
+            "vhd": {
+              "uri": "[concat(reference(resourceId('Microsoft.Storage/storageAccounts/', variables('storageAccountName'))).primaryEndpoints.blob, 'vhds/', variables('vmName'), '_', copyIndex(), '_osdisk.vhd')]"
+            },
+            "createOption": "FromImage"
+          },
+          "imageReference": {
+            "publisher": "[parameters('imagePublisher')]",
+            "offer": "[parameters('imageOffer')]",
+            "sku": "[parameters('imageSKU')]",
+            "version": "latest"
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(variables('nicName'), '-', copyIndex()))]"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

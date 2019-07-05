@@ -1,0 +1,33 @@
+{
+  "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "adminUsername": {
+      "value": "<Replace it with Admin username>"
+    },
+    "sshKeyData": {
+      "value": "<Replace it with SSH public key>"
+    },
+    "numberOfInstances": {
+      "value": 2
+    },
+    "imagePublisher": {
+      "value": "Canonical"
+    },
+    "imageOffer": {
+      "value": "UbuntuServer"
+    },
+    "imageSKU": {
+      "value": "16.04-LTS"
+    },
+    "vmSize": {
+      "value": "Standard_B2s"
+    },
+    "aadClientId": {
+      "value": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    },
+    "aadClientSecret": {
+      "value": "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+    }
+  }
+}
